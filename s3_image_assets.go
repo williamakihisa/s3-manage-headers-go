@@ -22,27 +22,20 @@ const (
     S3_REGION = "ap-southeast-1"
     S3_BUCKET = "webstorieskompas"
     S3_BUCKET_UPLOAD = "webstorieskompas"
-    HTML_PATH = "html/"
+    ASSET_PATH = "assets/"
 )
 
 func main() {
   http.HandleFunc("/", handler)
-  http.ListenAndServe(":9191", nil)
+  http.ListenAndServe(":9292", nil)
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
 
-    var new_path = HTML_PATH+strconv.FormatInt(time.Now().UnixNano() / int64(time.Millisecond), 10)+"/"
-         _, err := os.Stat(new_path)
-
-         if os.IsNotExist(err) {
-           errDir := os.MkdirAll(new_path, 0777)
-           if errDir != nil {
-             log.Fatal(err)
-           }
-         }
-
     dt := time.Now()
+    var new_path = ASSET_PATH+strconv.FormatInt(time.Now().UnixNano() / int64(time.Millisecond), 10)+"/"
+
+
     // Create a single AWS session for download and remove
     s, err := session.NewSession(&aws.Config{Region: aws.String(S3_REGION)})
     if err != nil {
@@ -51,30 +44,55 @@ func handler(w http.ResponseWriter, r *http.Request) {
     i,j,k := 0,0,0
     var newelm []string
     var tempelm []string
+    var subList []string
     //list file html from s3
-    s3List := handlerList(s, "tap/html")
+    s3List := handlerList(s, "tap/assets")
+
     for range s3List {
-      var html = strings.Replace(s3List[i], "tap/html/", "", -1)
-      if (len(html) != 0){
-        tempelm = append(tempelm, html)
+      if (strings.Contains(strings.ToLower(s3List[i]), "jpg") || strings.Contains(strings.ToLower(s3List[i]), "png") || strings.Contains(strings.ToLower(s3List[i]), "jpeg") || strings.Contains(strings.ToLower(s3List[i]), "webp")){
+        var html = strings.Replace(s3List[i], "tap/assets/", "", -1)
+        if (len(html) != 0){
+           var pos = strings.Index(html, "/")
+           var subs = html[0:pos]
+           subList = append(subList, subs)
+        }
       }
       i++
     }
+
+    tempelm = uniqueArray(subList)
+
     //check from listing file if no exist then reupload with cache-control
-    storyList := readJSONToken("storylist.json")
-    // fmt.Printf("%+q", s3List)
-    newelm = difference(tempelm, storyList)
-    // fmt.Printf("%+q", newelm)
-    // panic("stop")
+    imageList := readJSONToken("imagelist.json")
+    newelm = difference(tempelm, imageList)
 
     if (len(newelm) > 0){
-      fmt.Fprintln(w, "new story found start reuploading and store list json! - "+dt.String())
+      fmt.Fprintln(w, "new asset folder found start reuploading and store assets! - "+dt.String())
       fmt.Fprintf(w, "%+q", newelm)
       fmt.Fprintln(w, "%nbsp")
+
       for range newelm {
-         downloadS3(s, "tap/html/"+newelm[j],new_path+newelm[j])
-//         removeS3("tap/html/"+newelm[j])
-         storyList = append(storyList, newelm[j])
+         var imageDetail = handlerList(s, "tap/assets/"+newelm[j])
+         _, err := os.Stat(new_path+newelm[j])
+
+         if os.IsNotExist(err) {
+           errDir := os.MkdirAll(new_path+newelm[j], 0775)
+           if errDir != nil {
+             log.Fatal(err)
+           }
+         }
+
+         l := 0
+         for range imageDetail {
+           var newfilename = strings.Replace(imageDetail[l], "tap/assets/"+newelm[j], "", -1)
+           newfilename = strings.Replace(newfilename, "/", "", -1)
+           if (len(newfilename) > 0){
+           downloadS3(s, imageDetail[l],new_path+newelm[j]+"/"+newfilename)
+           fmt.Fprintln(w, "image to download = "+imageDetail[l])
+           }
+           l++
+         }
+         imageList = append(imageList, newelm[j])
          j++
       }
       // Create a single AWS session for uploading
@@ -83,24 +101,51 @@ func handler(w http.ResponseWriter, r *http.Request) {
           log.Fatal(err2)
       }
       for range newelm {
-         err = AddFileToS3(s2, "tap/html/"+newelm[k], new_path+newelm[k])
-         if err != nil {
-             log.Fatal(err)
-         }else{
-           fmt.Fprintln(w, "pathhapus = "+new_path+newelm[k])
-  //         removeFile(newelm[k])
+         var imageDetail = handlerList(s2, "tap/assets/"+newelm[k])
+         y := 0
+         for range imageDetail {
+           if (strings.Contains(strings.ToLower(imageDetail[y]), "jpg") || strings.Contains(strings.ToLower(imageDetail[y]), "png") || strings.Contains(strings.ToLower(imageDetail[y]), "jpeg") || strings.Contains(strings.ToLower(imageDetail[y]), "webp")){
+              fmt.Fprintln(w, imageDetail[y])
+              var newfileupload = strings.Replace(imageDetail[y], "tap/assets/"+newelm[k], "", -1)
+              newfileupload = strings.Replace(newfileupload, "/", "", -1)
+              if (len(newfileupload) > 0){
+//                removeS3(imageDetail[y])
+                err = AddFileToS3(s2, imageDetail[y], new_path+newelm[k]+"/"+newfileupload)
+                if err != nil {
+                    log.Fatal(err)
+                }else{
+                  fmt.Println(newelm[k]+"/"+newfileupload);
+ //                 removeFile(newelm[k]+"/"+newfileupload)
+                }
+              }
+           }
+           y++
          }
          k++
       }
-      writeJSONToken(storyList, "storylist.json")
+
+      writeJSONToken(imageList, "imagelist.json")
       RemoveContents(new_path)
       fin := time.Now()
+
       fmt.Fprintln(w, "finish process ! - " + fin.String())
     }else{
       finerr := time.Now()
-      fmt.Fprintln(w, "no new story found! - " + finerr.String())
+      fmt.Fprintln(w, "no new image asset found! - " + finerr.String())
     }
 
+}
+
+func uniqueArray(element []string) []string {
+  encounter := map[string]bool{}
+  for v:= range element {
+     encounter[element[v]] = true
+  }
+  result := []string{}
+  for key, _ := range encounter {
+     result = append(result, key)
+  }
+  return result
 }
 
 func difference(a, b []string) []string {
@@ -145,7 +190,6 @@ func downloadS3(sess *session.Session, s3path string, filename string) int {
   if err != nil {
       return 0
   }
-  // fmt.Println("Downloaded", file.Name(), numBytes, "bytes")
   return int(numBytes)
 }
 
@@ -179,6 +223,7 @@ func handlerList(sess *session.Session, fileDir string) []string {
         if err != nil {
                 fmt.Printf("Error listing bucket:\n%v\n", err)
         }
+
         for _, object := range res.Contents {
                 output = append(output, *object.Key)
         }
@@ -200,10 +245,8 @@ func AddFileToS3(s *session.Session, fileDir string, filename string) error {
     var size int64 = fileInfo.Size()
 
     if size > 100000 {
-      fmt.Println("time to resize")
+      fmt.Println("time to resize this = "+filename)
       size = 100000
-    }else{
-      fmt.Println("size is ", size)
     }
 
     buffer := make([]byte, size)
